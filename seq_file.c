@@ -34,6 +34,10 @@ static void seq_move(FILE* file, SeqTuple t) {
 	for (size_t i = 0; i < BLOCK_SIZE; ++i) {
 		saved = block.data[i];
 		memcpy(&block.data[i], &t, sizeof(SeqTuple));
+		if (saved.flag) {
+			block_write(&block, file);
+			return;
+		}
 		t = saved;
 		if (t.id == -1) {
 			if (i + 1 == BLOCK_SIZE) {
@@ -46,6 +50,7 @@ static void seq_move(FILE* file, SeqTuple t) {
 			return;
 	  	}
 	}
+	block_write(&block, file);
 	seq_move(file, saved);
 }
 int seq_add(FILE* file, SeqTuple t) {
@@ -65,12 +70,11 @@ int seq_add(FILE* file, SeqTuple t) {
 				if (i + 1 == BLOCK_SIZE) {
 					block_write(&block, file);
 					block_write(&empty_block, file);
-					return 0;
 				} else {
 					memcpy(&block.data[i + 1], &empty_tuple, sizeof(SeqTuple));
 					block_write(&block, file);
-					return 0;
 				}
+				return 0;
 			}
 			if (t.id == temp->id) {
 				return -1;
@@ -80,14 +84,18 @@ int seq_add(FILE* file, SeqTuple t) {
 			}
 
 			SeqTuple save = *temp;
+			memcpy(&block.data[i], &t, sizeof(SeqTuple));
+			if (save.flag) {
+				fseek(file, -sizeof(SeqBlock), SEEK_CUR);
+				block_write(&block, file);
+				return 0;
+			}
 			if (i + 1 == BLOCK_SIZE) {
 				fseek(file, -sizeof(SeqBlock), SEEK_CUR);
-				memcpy(&block.data[i], &t, sizeof(SeqTuple));
 				block_write(&block, file);
 				seq_move(file, save);
 				return 0;
 			}
-			memcpy(temp, &t, sizeof(SeqTuple));
 			t = save;
 		}
 	} while ((read_num = block_read(&block, file)));
@@ -110,12 +118,82 @@ int seq_print(FILE* file) {
 			if (temp->id == -1) {
 				return 0;
 			}
-			printf("|%10ld|%10d|%-13s|%-15s|%16s|%4d|\n", temp->id, temp->membership_num, temp->isbn, temp->book_name, temp->date, (int)temp->stat);
+			if (!temp->flag)
+				printf("|%10ld|%10d|%-13s|%-15s|%16s|%4d|\n", temp->id, temp->membership_num, temp->isbn, temp->book_name, temp->date, (int)temp->stat);
 		}
 	} while ((read_num = block_read(&block, file)));
 	return 0;
 }
-SeqTuple seq_find(FILE* file, int64_t id);
-int seq_update(FILE* file, SeqTuple t);
-int seq_logic_delete(FILE* file, int64_t id);
+SeqTuple seq_find(FILE* file, int64_t id) {
+	if (!file) {
+		return empty_tuple;
+	}
+	rewind(file);
+
+	SeqBlock block = { 0 };
+	int read_num = block_read(&block, file);
+	do {
+		for (size_t i = 0; i < BLOCK_SIZE; ++i) {
+			SeqTuple* temp = &block.data[i];
+			if (temp->id == -1 || id > temp->id) {
+				return empty_tuple;
+			}
+			if (temp->id == id) {
+				return *temp;
+			}
+		}
+	} while ((read_num = block_read(&block, file)));
+
+	return empty_tuple;
+}
+int seq_update(FILE* file, SeqTuple t) {
+	if (!file) {
+		return -1;
+	}
+	rewind(file);
+
+	SeqBlock block = { 0 };
+	int read_num = block_read(&block, file);
+	do {
+		for (size_t i = 0; i < BLOCK_SIZE; ++i) {
+			SeqTuple* temp = &block.data[i];
+			if (temp->id == -1 || t.id > temp->id) {
+				return -1;
+			}
+			if (t.id == temp->id) {
+				memcpy(temp, &t, sizeof(SeqTuple));
+				fseek(file, -sizeof(SeqBlock), SEEK_CUR);
+				block_write(&block, file);
+				return 0;
+			}
+		}
+	} while ((read_num = block_read(&block, file)));
+
+	return -1;
+}
+int seq_logic_delete(FILE* file, int64_t id) {
+	if (!file) {
+		return -1;
+	}
+	rewind(file);
+
+	SeqBlock block = { 0 };
+	int read_num = block_read(&block, file);
+	do {
+		for (size_t i = 0; i < BLOCK_SIZE; ++i) {
+			SeqTuple* temp = &block.data[i];
+			if (temp->id == -1 || temp->id > id) {
+				return -1;
+			}
+			if (temp->id == id) {
+				temp->flag = 1;
+				fseek(file, -sizeof(SeqBlock), SEEK_CUR);
+				block_write(&block, file);
+				return 0;
+			}
+		}
+	} while ((read_num = block_read(&block, file)));
+
+	return -1;
+}
 int seq_delete(FILE* file, int64_t id);
